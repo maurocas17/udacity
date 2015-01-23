@@ -1,17 +1,17 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-The purpose of this class is to get a overall view of the OSM xml structure.
-Below are the actions/processes taken:
-    1.  All the attributes of the node, way and relation element,
+The purpose of this class is to get an overall view of the OSM xml structure.
+Below are the actions/processes that are executed:
+    1.  All the attributes of the <node>, <way> and <relation> are checked,
         whether they conform to the expected data type.
     2.  Checks whether k has problem characters.
     3.  Checks whether k and v is empty
-    4.  Checks whether node references in way tag has corresponding nodes.
+    4.  Checks whether node references in <way> tag has corresponding nodes.
     5.  Keeps track of all the element/tags, print their total at the end
-    6.  Print out the total unique users/contributors
+    6.  Prints out the total unique users/contributors
     7.  Saves the k and v attribute values in a tagKV.pickle file.  
-        This file is an input to MapContentAudit.py for further evaluation
+        This file is use as an input to MapContentAudit.py for content evaluation
         
 
 Output of this class when evaluating qc.osm

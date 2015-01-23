@@ -2,18 +2,18 @@
 # -*- coding: utf-8 -*-
 """
     The purpose of this class is to identify possible problems for the
-    k and v attribute of the tag element.
+    k and v attribute of the <tag> element.
     
     Below are the checks done:
     1.  If k=="street", check v for if:
-            a.  has problem words like corner, Along, etc
-            b.  has characters like comma
+            a.  it has non-street words like corner, Along, etc
+            b.  it has problem characters like comma
             c.  are all in lower case
             d.  might be duplicate
-    2.  If postcode, if it's a valid Quezon City postcode
+    2.  If k=="postcode", determine whether it's a valid Quezon City postcode
     
     Note that only k attributes that has up to two identifiers like "addr:street" 
-    is checked, the rest are ignored.
+    are checked, the rest are ignored.
     
     All are written to mapContentAudit.csv with the following headers: Comment, Tag K, Tag V
     Sample:
@@ -23,14 +23,9 @@
     Has problem words,    street,        "4th Avenue, corner C. Cordero"
     Has problem chars,    street,        "537 EDSA, Cubao"
 
-    The mapContentAudit.csv is copied to mapContentAudit_WithCorrections.csv
-    The records are checked manually.  
-    A new column "Correction" is added to mapContentAudit_WithCorrections.csv.
-        and corrections for each v value are entered into this column.
-        
-    Note that corrections are only done for street and city.
-    The correction file is use as input to PrepForDB
-    
+    The purpose of writing to a csv file is to have a thorough check of the "v" value, so that
+    corrections can be added on the 4th column "Corrections".  The updated csv should be saved as 
+    mapContentAudit_WithCorrections.csv.  This file is used as input to PrepForDB.py.
     
 
 """

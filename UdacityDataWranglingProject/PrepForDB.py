@@ -1,31 +1,21 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-import xml.etree.ElementTree as ET
-import pprint
-import re
-import codecs
-import json
-import csv
 
 """
 The purpose of this class is to prepare data for inserting to MongoDB.
-The class parses the OSM map xml and process tags node and way element
-into a dictionary/json format.  
+The class parses the OSM map xml and only process tags node and way element.
+Corrections are applied and each record is converted to a json format.
 
 Below are the corrections done:
 1.  If there is an invalid characters in k attribute, record is skipped
 2.  If there is an empty k or v attribute, record is skipped
-3.  If there are more than two colons used as delimiter for k attribute, record is ignored
+3.  If there are more than two colons (:) used as delimiter for k attribute, record is skipped
 4.  Checks if there is a correction for the tag V attribute from
-        the file generated from MapContentAudit.  
-        Replaces v with correction from this file.
+        the file generated from MapContentAudit, mapContentAudit_WithCorrections.csv, and  
+        replaces v with corrected value from the file.
 5.  There are 2 additional correction done to street attribute: 
         - converting abbreviated street type format.  i.e. St. to Street
-        - all lower case.  i.e. old sauyo road to Old Sauyo Road
-
-
-The corrected node and way record is saved into dictionary/json format (see below)
-and saves to <map file>.json.  This file will be saved to Mongo DB using mongoimport command
+        - appying proper case format when all are in lower case.  i.e. old sauyo road to Old Sauyo Road
 
 
 The json/dictionary output for each node and way record will look like this:
@@ -63,8 +53,17 @@ should be turned into
 "node_refs": ["305896090", "1719825889"]
 
 
+The parsed records are saved to MongoDB using the generated json file via mongoimport command.
 
 """
+
+
+import xml.etree.ElementTree as ET
+import pprint
+import re
+import codecs
+import json
+import csv
 
 
 streetSuffix = ["Street", "Avenue", "Lane", "Highway", "Boulevard", "Extension", "Drive", "Road"]
