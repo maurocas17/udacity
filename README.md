@@ -1,2 +1,2 @@
 # udacity
-Data Wrangling project
+Contains projects in Udacity Data Analyst Nanodegree
