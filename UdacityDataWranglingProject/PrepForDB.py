@@ -92,9 +92,9 @@ lower_colon = re.compile(r'^([a-z]|_)*:([a-z]|_)*$')
 problemchars = re.compile(r'[=\+/&<>;\'"\?%#$@\,\. \t\r\n]')
 
 CREATED = [ "version", "changeset", "timestamp", "user", "uid"]
-corrected_values = {}
+DEBUG = False
 
-def shape_element(element, corrections, onlyQC = False):
+def shape_element(element, corrections, corrected_values, onlyQC = False):
     node = {}
     createdAttr = {}
     pos = []
@@ -142,7 +142,7 @@ def shape_element(element, corrections, onlyQC = False):
                     address[k_arr[1]] = corrected_v
                 else: node[k] = corrected_v
                 
-                if (corrected_v != v): corrected_values[v] = corrected_v
+                if (DEBUG == True and corrected_v != v): corrected_values[v] = corrected_v
                 
             elif elem.tag == "nd": node_refs.append(elem.attrib["ref"])
         
@@ -166,7 +166,13 @@ def shape_element(element, corrections, onlyQC = False):
         return None
 
 
-def process_map(file_in, pretty = False, onlyQC = False):
+"""
+    In the udacity sample code, this method returns a list, containing all the elements written
+    in the json file.  I've modified this code to not return a list of elements and
+    to remove maintaining a list of said elements because this is causing large memory
+    usage that takes a long time for the python code to exit normally.
+"""
+def process_map(file_in, pretty = None, onlyQC = False):
     # You do not need to change this file
     if (onlyQC == True):
         file_out = "{0}_qc.json".format(file_in)
@@ -200,21 +206,21 @@ def process_map(file_in, pretty = False, onlyQC = False):
     print "\n****** CORRECTIONS **************"                
     pprint.pprint(corrections)
                 
-    data = []
+    corrected_values = {}
     with codecs.open(file_out, "w") as fo:
         for _, element in ET.iterparse(file_in):
-            el = shape_element(element, corrections, onlyQC)
+            el = shape_element(element, corrections, corrected_values, onlyQC)
             if el:
-                data.append(el)
                 if pretty:
                     fo.write(json.dumps(el, indent=2)+"\n")
                 else:
                     fo.write(json.dumps(el) + "\n")
-                    
-    print "\n****** CORRECTED TAG V **************"                
-    pprint.pprint(corrected_values)
-        
-    return data
+    
+     
+    if DEBUG == True:
+        print "\n****** CORRECTED TAG V **************" 
+        pprint.pprint(corrected_values)
+    
 
 def toUnicode(val):
     isAscii = len(val.decode('ascii', 'ignore')) == len(val)  
@@ -251,9 +257,9 @@ def getCorrectedStreetName(v):
 
     return v
     
-
 if __name__ == "__main__":
     # NOTE: if you are running this code on your computer, with a larger dataset, 
-    # call the process_map procedure with pretty=False. The pretty=True option adds 
+    # call the process_map procedure with pretty=None. The pretty=True option adds 
     # additional spaces to the output, making it significantly larger.
-    data = process_map('qc.osm', False)
+    process_map('qc.osm')
+    print "End of process"
