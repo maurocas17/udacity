@@ -1,0 +1,135 @@
+---
+title: "Gapminder Analysis"
+author: "Maureen Rocas"
+date: "Wednesday, February 04, 2015"
+output: html_document
+Source: Gapminder Data at http://www.gapminder.org/data/
+---
+
+This is a study of the Gapminder dataset for Unemployment Rate for Aged 25-54.
+```{r, echo=FALSE}
+#Initialize environment
+#install.packages("reshape")
+
+setwd("C:/Users/mrocas/Documents/docs/tutorials/udacity/Data Analysis with R/Lesson 3")
+getwd()
+library("ggplot2")
+library("reshape")
+library("gridExtra")
+library("scales")
+
+```
+
+Load Gapminder data
+
+```{r} 
+
+gapminder <- read.csv('indicator_t 25-54 unemploy.csv')
+names(gapminder)
+dim(gapminder)
+
+```
+
+Let's clean up data by:
+  - renaming 'Total.25.54.unemployment...." column to Country
+  - removing the last column "X" as this contains NA value
+  - removing the last row as this contain NULL
+
+```{r}
+
+gapminder$x
+gapminder$Total.25.54.unemployment....
+
+# rename column
+gapminder <- rename(gapminder, c(Total.25.54.unemployment....="Country"))
+
+#remove last column
+gapminder <- subset(gapminder,select=-X)
+
+#remove last row
+gapminder <- gapminder[1:(nrow(gapminder)-1),]
+
+
+#Add country_id
+gapminder$CountryId <- c(1:29)
+
+dim(gapminder)
+
+
+```
+
+Plot histogram
+
+```{r}
+
+#melt data by country
+gapminder1 <- melt(gapminder[,1:27], id=c("Country", "CountryId"))
+
+#Add a new Date Column, convert Year(variable) to a date dataype
+gapminder1 <- transform(gapminder1, Date=rep(as.Date(variable,"X%Y")), nrow(gapminder1))
+
+#remove rows with NA values
+gapminder1NoNA <- subset(gapminder1, !is.na(value))
+
+#Histogram
+qplot(data=gapminder1NoNA,x=value, binwidth=0.50,
+      xlab="Unemployment Rate (%)",
+      ylab="Frequency in Sample Data",
+      color=I("black"), fill=I("#099DD9")) + 
+      scale_x_continuous(lim=c(0,22), breaks=seq(0,22,3))
+
+```
+
+The histogram shows that the concentration of data is around 3.5 to 6.5 unemployment rate.  Let's see the total number of observations per country.
+
+```{r}
+
+# Total Observations per Country
+qplot(data=gapminder1NoNA,x=Country,
+      xlab="Countries",
+      main="Total Observations per Country",
+      fill=ifelse(as.numeric(format(Date, "%Y")) < 1990, "1980s",ifelse(as.numeric(format(Date, "%Y")) < 2000, "1990s", "2000s")),
+      geom="bar") + 
+  ylab("Number of Observations") +
+  scale_fill_manual(name="Date Range", values=c("1980s"="red","1990s"="blue","2000s"="green")) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) 
+
+```
+
+As shown above, we don't have equal observations for each country.  Like Czech Republic and United Kingdome, there are missing observations for 1980s and 1990s.
+We can also see that some countries have less data available for 1980s, like Switzerland, Australia, Germany, and others.
+
+Here is a boxplot, showing the median and quantile values for each Country
+
+```{r, fig.width=8, fig.height=6}
+
+qplot(data=gapminder1NoNA, x=Country, y=value,
+      geom="boxplot") +
+  ylab("Unemployment Rate (%)") +
+  coord_cartesian(ylim=c(0,22))  +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) 
+
+#Overall summary statistics
+by(gapminder1NoNA$value, gapminder1NoNA$Country, summary)
+
+
+```
+
+Let's look at the Unemployment Rate per year per Country.  
+
+Here we can see the decreasing or increasing unemployment rate per country per year
+```{r, fig.width=8, fig.height=8}
+#Unemployment Rate per Date
+qplot(x=Date, y=Country,
+      data=gapminder1NoNA, binwidth=1,
+      xlab="Year", 
+      size=value,
+      geom="point",
+      main="Unemployment Rate per Year per Country",
+      ylab="Countries") +
+  scale_size_continuous(name="Unemployment\nRate", breaks=seq(0,22, 4)) +
+  scale_x_date(lim=c(as.Date("1981", "%Y"), as.Date("2005", "%Y")), 
+                     breaks=date_breaks("2 years"),
+                     labels=date_format("%Y"))
+
+```
