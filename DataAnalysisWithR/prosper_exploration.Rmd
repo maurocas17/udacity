@@ -1,0 +1,1097 @@
+PROSPER Loan Exploration by Maureen Rocas
+========================================================
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, packages}
+# Load all of the packages that you end up using
+# in your analysis in this code chunk.
+
+# Notice that the parameter "echo" was set to FALSE for this code chunk.
+# This prevents the code from displaying in the knitted HTML output.
+# You should set echo=FALSE for all code chunks in your file.
+
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+library(RColorBrewer)
+library(ellipse)
+library(reshape)
+library(memisc)
+library(scales)
+
+```
+
+```{r echo=FALSE, CommonFunctions}
+
+#Subsets data according to the proportion required
+getPortion <- function(x, col, proportion) {
+  portion <- quantile(x[[col]], probs=proportion)
+  mydata <- subset(x, x[[col]] < portion)
+  return (mydata)
+}
+
+
+#Use in generating a summary table for each of the ProsperRating.  Add 5 columns
+#   containing the summary values for the given colName: Min, 1st Q, Median, 
+#   3rd Q, Max
+#
+#Parameters:
+#   df - the source dataframe
+#   x  - is a dataframe that contain rows corresponding to the 7 
+#         ProsperRating.  This dataframe was generated from summarise from dplyr 
+#         package.
+#   colName - a column in df in which the summaries will be applied
+#   alias - the column name that will be created in x, concatenated with 
+#         summary suffix.  i.e. if alias=income, for median, the column
+#         will be created is income.50
+addSummaryColumnsByProsperRating <- function(df, x, colName, alias=NULL) {
+  if (is.null(alias) == T) {
+    alias <- colName
+  } 
+  
+  temp <- by(df[[colName]], df[["ProsperRating"]], summary)
+  temp.names <- names(temp[[1]])
+  rows <- nrow(x)
+  temp.num <- 0
+  
+  for (nm in temp.names) {  
+    if (!(nm %in% c("Mean", "NA's"))) {
+      mylist <- c()
+      for (i in 1:rows ) {
+          mylist[i] <- temp[[i]][[nm]]
+      }
+      x[[paste(alias, temp.num, sep=".")]]  <- mylist
+      temp.num <- temp.num + 25
+    }
+  }
+
+  
+  return (x)
+}
+
+
+#x should be in the format <varname>.<qval> 
+#   i.e. income.50
+#Returns the <qval> portion in numeric/float type.
+getQVal <- function(x) {
+  q <- splitByDot(x,2)
+  q <- as.numeric(q)/100
+  return(q)
+}
+
+#Splits x using dot (.) separator and returns the indicated index.
+splitByDot <- function(x, index=1) {
+  return (unlist(strsplit(x,".",fixed= T))[[index]])
+}
+
+
+#x is a dataframe subset with duplicate column values
+#Return the column(s) that is unique
+#Will just look at the first two rows, so prior to this method ensure
+#that x is ordered according to the duplicate id
+findTheUniqueColumnAmongDuplicateRows <- function(x) {
+    theCol <- c()
+    
+    #if zero, then there is atleast 1 column that is unique
+    if (nrow(x[duplicated(x),]) == 0) {
+      for (i in 1:ncol(x)) {
+        isDuplicate <- duplicated(x[1:2,i:i])  
+        if (isDuplicate[2] == FALSE) {
+            theCol[length(theCol)+1] <- names(x)[i]
+        } 
+      }
+    }    
+    return (theCol)
+  
+}
+
+
+```
+
+```{r echo=FALSE, Load_the_Data}
+# Load the Data
+prosper <- read.csv("prosperLoanData.csv")
+```
+
+# Univariate Plots Section
+```{r echo=FALSE, Univariate_Plots}
+
+dim(prosper)
+
+#inspect all variables, read "Prosper Loan Data - Variable Definitions.csv".
+#also read https://www.prosper.com/help/topics/how-to-read-a-loan-listing/  
+str(prosper)
+
+totalRows <- nrow(prosper)
+
+```
+
+ListingKey is a unique key for each listing. I wonder if all records have unique ListingKeys, let's check...
+
+```{r echo=FALSE, Univariate_Plots-Duplicate_ListingKeys1}
+
+#get the duplicate ListingKey records
+dup <- unique(prosper$ListingKey[duplicated(prosper$ListingKey)])
+p1 <- subset(prosper, ListingKey %in% dup)
+p1 <- p1[order(p1$ListingKey),]
+
+nrow(p1)
+findTheUniqueColumnAmongDuplicateRows(p1)
+
+#Looks like ProsperScore is the only unique column, show sample
+head(p1[,c("ListingKey","ListingNumber","ListingCreationDate",
+           "ProsperRating..Alpha.","ProsperScore")])
+
+```
+
+There are 1698 duplicate records and looks like only ProsperScore is unique among the duplicate records.  
+
+```{r echo=FALSE, Univariate_Plots-Duplicate_ListingKeys2}
+
+
+p2 <- p1
+#remove ProsperScore column
+p2$ProsperScore <- NULL
+
+#get the repeated rows
+p2.dup <- duplicated(p2)
+p2 <- p2[p2.dup,]
+
+nrow(p2)
+
+```
+
+Removing the ProsperScore, I got 871 duplicate records.  I'm thinking of focusing my analysis on ProsperRating and will not be looking into ProsperScore.  So from the duplicate records, I'll retain the first entry for each ListingKey and filter out the rest.  Also, ProsperRating is only applicable for loans originated after July 2009, so I will filter out pre-July 2009 loans as well.
+
+```{r echo=FALSE, Univariate_Plots-Rating1}
+#get the first/unique entry
+p1.firstentries <- p1[!(p2.dup),]
+
+#remove all duplicate records
+prosper <- subset(prosper, !(ListingKey %in% dup))
+
+#add in the firstentries
+prosper <- rbind(prosper, p1.firstentries)
+
+#p2 are the duplicate entries that were removed
+#should equal the original total rows
+totalRows == nrow(prosper) + nrow(p2)
+
+
+#ProsperRating is only applicable after July 2009, so subset data...
+prosper$LoanOrigDate <- as.Date(prosper$LoanOriginationDate, 
+                                "%Y-%m-%d %H:%M:%S")
+prosper <- subset(prosper, prosper$LoanOrigDate > as.Date("2009-07-31"))
+
+names(prosper)[names(prosper)=="ProsperRating..numeric."] <- 
+  "ProsperRating"
+
+#better to make the rating variables ordinal, nicer in graphs
+prosper$ProsperRating <- ordered(prosper$ProsperRating, seq(1,7,1))
+prosper$CreditScoreRangeLower <- ordered(prosper$CreditScoreRangeLower, 
+                                            seq(600,880,20))
+
+ggplot(aes(x=ProsperRating), data=prosper) +
+  geom_histogram() 
+
+summary(prosper$ProsperRating)
+
+```
+
+Majority of the loans have a ProsperRating of 4, which is an average rating.  The best rating, 7, has only over 5000.  
+
+I won't include NA ProsperRating in my analysis, so I will remove them from our sample data.
+
+
+```{r echo=FALSE, Univariate_Plots-Rating3}
+
+prosper <- subset(prosper, !is.na(ProsperRating))
+
+ggplot(aes(x=CreditScoreRangeLower), data=prosper) +
+  geom_histogram()
+
+summary(prosper$CreditScoreRangeLower)
+
+```
+
+The majority of the borrowers have a CreditScore from 660 to 700.
+
+```{r echo=FALSE, Univariate_Plots-Borrower1}
+
+ggplot(aes(x=StatedMonthlyIncome), data=prosper) +
+  geom_histogram() +
+  scale_y_sqrt()   
+summary(prosper$StatedMonthlyIncome)
+
+```
+
+There's more than 1 million difference from 3rd quantile to the max.  It's also hard to see the distribution...
+
+```{r echo=FALSE, Univariate_Plots-Borrower2}
+
+ggplot(aes(x=StatedMonthlyIncome), data=prosper) +
+  geom_histogram(binwidth=0.20,colour="black", fill="white") +
+  scale_y_sqrt() +
+  scale_x_log10()  +
+  xlab("StatedMonthlyIncome (Log10)") 
+
+tail(table(prosper$StatedMonthlyIncome))
+head(table(prosper$StatedMonthlyIncome))
+
+```
+
+It's hard to see the distribution, especially with an outlier in the millionth point.  Using log10 certainly helps to see that majority of the borrowers have a monthly income of around $5000.  I find the millionth monthly income strange... and there's only 1.  The next income below that outlier is $618,547.  Another strange thing are the monthly income that are less than $1.  Hmmm, curiouser and curiouser... 
+
+```{r echo=FALSE, Univariate_Plots-Borrower3}
+
+ggplot(aes(x=ProsperPrincipalBorrowed), data=prosper) +
+  geom_histogram() +
+  scale_y_sqrt()  
+summary(prosper$ProsperPrincipalBorrowed)
+
+```
+
+The PrincipalBorrowed distribution is right-skewed, with median in $6356 and maximum in $72500. There's a peak around $5,000.   
+
+```{r echo=FALSE, Univariate_Plots-Borrower4}
+
+ggplot(aes(x=AvailableBankcardCredit), data=prosper) +
+  geom_histogram() +
+  scale_y_sqrt()  
+summary(prosper$AvailableBankcardCredit)
+         
+```
+
+The AvailableBankcardCredit's mean, $11400, is more than twice the median value, $4564.  However, looking at the figure above, it is hard to see the median and the mean values but I think it is somewhere within the peak.  I'll transform the x-axis to Log10.
+
+```{r echo=FALSE, Univariate_Plots-Borrower5}
+
+ggplot(aes(x=AvailableBankcardCredit), data=prosper) +
+  geom_histogram(binwidth=0.20,colour="black", fill="white") +
+  scale_y_sqrt()  + 
+  xlab("AvailableBankcardCredit (Log10)") +
+  scale_x_log10() +
+  geom_vline(xintercept=quantile(prosper$AvailableBankcardCredit,probs=0.5),
+            colour="red", linetype="longdash") +
+  geom_vline(xintercept=mean(prosper$AvailableBankcardCredit),
+            colour="red", linetype="longdash" )
+
+```
+
+Now, I can definitely see the peak; and the red dashline, which are the median and mean value, respectively, surround the two peaks.
+ 
+```{r echo=FALSE, Univariate_Plots-Loan1}
+
+ggplot(aes(x=Term), data=prosper) +
+  geom_histogram(colour="black", fill="white") 
+table(prosper$Term)
+
+```
+
+There are 3 terms: 12 months, 36 months, and 60 months.  Majority of the borrowers choose the 36 month term loan.
+
+
+```{r echo=FALSE, Univariate_Plots-Loan2}
+
+ggplot(aes(x=LoanOriginalAmount), data=prosper) +
+  geom_histogram(binwidth=1000,colour="black", fill="white") +
+  scale_y_sqrt()
+summary(prosper$LoanOriginalAmount)
+```
+
+In the LoanOriginalAmount distribution, you can clearly see the peaks for every $5,000 segment.  So for $1,000-$5,000, the peak is $4,000. Likewise, for $26,000 to $30,000, the peak is $30,000.  There seem to be a trend in the peaks... 10K, 20K, 25K, 30K, 35K.  Do people just like a nice number, divisible by 5?  But why 4K?  Hmmm, is this worth exploring... or not.
+
+```{r echo=FALSE, Univariate_Plots-Loan3}
+
+ggplot(aes(x=LenderYield), data=prosper) +
+  geom_histogram(binwidth=.01) 
+summary(prosper$LenderYield)
+
+```
+
+There's a big peak in 0.30.  I wonder what loan amount and term gives this yield.
+
+Now, I'll look at the next 6 variables which I will refer to as Bad Records and grouped them into three: Inquiries, Delinquencies and Public Records.  I'll also show their summaries, where the first one will pertain to the first plot while the second summary will pertain to the second plot.
+
+I'll look at the Inquiries first.
+
+```{r echo=FALSE, Univariate_Plots-BadRecords1}
+
+plot1 <- ggplot(aes(x=InquiriesLast6Months), data=prosper) +
+  geom_histogram(binwidth=1)  +
+  scale_y_sqrt()
+
+plot2 <- ggplot(aes(x=TotalInquiries), data=prosper) +
+  geom_histogram(binwidth=1)  +
+  scale_y_sqrt()
+
+grid.arrange(plot1, plot2, ncol=1)
+summary(prosper$InquiriesLast6Months)
+summary(prosper$TotalInquiries)
+
+```
+
+Both distribution are right-skewed.  In the first distribution, majority have zero Inquiries for the last 6 months.  While in the second distribution, majority of the loans have had atleast 2 Inquiries.
+
+```{r echo=FALSE, Univariate_Plots-BadRecords2}
+
+plot1 <- ggplot(aes(x=CurrentDelinquencies), data=prosper) +
+  geom_histogram(binwidth=1)  +
+  scale_y_sqrt()
+
+plot2 <- ggplot(aes(x=DelinquenciesLast7Years), data=prosper) +
+  geom_histogram(binwidth=1)  +
+  scale_y_sqrt()
+
+grid.arrange(plot1, plot2, ncol=1)
+summary(prosper$CurrentDelinquencies)
+summary(prosper$DelinquenciesLast7Years)
+
+```
+
+Similar to Inquiries, the distribution for Delinquencies are also right-skewed with majority of the loans having zero delinquencies.  This is backed by their median values which is zero.
+
+
+```{r echo=FALSE, Univariate_Plots-BadRecords3}
+
+plot1 <- ggplot(aes(x=PublicRecordsLast12Months), data=prosper) +
+  geom_histogram(binwidth=1) +
+  scale_y_sqrt()
+
+plot2 <- ggplot(aes(x=PublicRecordsLast10Years), data=prosper) +
+  geom_histogram(binwidth=1) +
+  scale_y_sqrt()
+
+grid.arrange(plot1, plot2, ncol=1)
+summary(prosper$PublicRecordsLast12Months)
+summary(prosper$PublicRecordsLast10Years)
+
+```
+
+Again, the distribution for Public Records is right-skewed with majority of the loans having zero public records.   
+
+Among the bad record variables, Public Records has the least number, with maximum for the last 10 years is 38 compared to Total Inquiries with 78 and Delinquencies for the past 7 years as 99.   This makes sense as Public Records pertains to court order or bankruptcies.  With such rare occurence, I wonder what influence the Public Record have on ProsperRating.  I'll look at this in the Bivariate section.
+
+All in all, the distribution for the bad record variables are right-skewed with majority of the data in or near zero point.  This clearly shows that most of the borrowers do not have bad record.  This is good to know for Prosper investors.
+
+# Univariate Analysis
+
+### What is the structure of your dataset?
+Originally, there are 113,937 loan records with 81 features or variables.  However, analyzing 81 features is difficult. So I've chosen 14 features and categorized them into 4 groups: Ratings, Borrower Information, Loan Information, and Bad Records.   
+
+These are:
+
+ Ratings:<br>
+  <ul>
+  <li>ProsperRating - The rating assigned at the time the listing is created.  Highest is 7 (AA in website), lowest is 1 (HR in website). </li>
+  <li>CreditScoreRangeLower - Shows lower credit rating provided by a consumer credit rating agency.</li>
+  </ul>
+  
+Borrower Information:<br>
+<ul>
+  <li>StatedMonthlyIncome</li>
+  <li>ProsperPrincipalBorrowed - Total principal borrowed on Prosper loans at the time the listing was created. This value will be null if the borrower had no prior loans.</li>
+  <li>AvailableBankcardCredit -  The total available credit via bank card at the time the credit profile was pulled.</li>
+ </ul>
+ 
+  Loan Information:<br>
+   <ul>
+   <li>LoanOriginalAmount</li>
+   <li>Term - The length of the loan expressed in months.</li> 
+   <li>LenderYield - is equal to the interest rate on the loan less the servicing fee.</li>
+  </ul>
+  
+  Bad Records:<br>
+  <ul>  
+  <li>InquiriesLast6Months and TotalInquiries - Number of inquiries at the time the credit profile was pulled.</li> 
+    <li>CurrentDelinquencies and DelinquenciesLast7Years - Number of accounts delinquent at the time the credit profile was pulled</li>
+  <li>PublicRecordsLast12Months and PublicRecordsLast10Years - Number of public records at the time the credit profile was pulled.  Public records include bankruptcies, liens, and judgements.</li>
+</ul>
+
+Furthermore, the 113,937 records was trimmed down to 83,966; loans that were made prior to July 2009, those with duplicate Listing Keys and those records with NA ProsperRating were removed.
+
+Observations:<br>
+<ul>
+<li>Prosper Rating and Credit Score have normal distributions.  Prosper Rating peaks at 4 and Credit Score peaks at 660-700</li>
+<li>The median monthly income is $5,000, 3rd quantile is $7,083.  There's 1 outlier at $1.75 million; removing this outlier, the maximum monthly income is $618,547</li>
+<li>75% of the borrowers have AvailableBankardCredit less than or equal to $13,900.  While the maximum is $498,400.  So 75% belong to just 2.8% of the maximum amount.</li>
+<li>There are 3 terms: 12 months, 36 months and 60 months.  Majority of the borrowers choose 36 month term.</li>
+<li>The minimum loan is $1,000, median is $7,500 and the maximum is $35,000.  There are noticeable peaks for every 5,000 segment: at $4,000, $10,0000, $15,000, $20,000, $25,000, $30,000, and $35,000.</li>
+<li>The median and 3rd quantile value for public records and current delinquencies is 0.  For 7 year delinquencies and 6month inquires, the median is zero, while 3rd quantile is 1 and 2, respectively.  Only TotalInquiries have the peak at 2, while the rest have the peak at 0.</li>    
+
+
+### What is/are the main feature(s) of interest in your dataset?
+I want to look at the data in behalf of a potential investor, thus, I chose ProsperRating as the main feature of interest.  ProsperRating is the rating set on the loan listing and it tells a potential investor the potential risk of a loan.    I would like to know what are considered risk and its relationship to ProsperRating.  
+
+Note that I did not include ProsperScore in my analysis although ProsperScore is one of the main features that is used to calculate ProsperRating.  This is because ProsperScore is calculated based on prosper loan history.  It tells the risk associated with a borrower.  Since I would be including other prosper loan historical details that are maybe used in ProsperScore computation, I thought it would be redundant to include ProsperScore as well.
+
+### What other features in the dataset do you think will help support your investigation into your feature(s) of interest?
+The other main feature that will help support my investigation is CreditScore, which is given by a credit rating agency.  Other variables that I included are:  
+<ul><li>AvailableBankcardCredit and borrower's income, which tells the borrower's capacity to pay</li>
+<li>total principal borrowed, inquiries, delinquent payments, and public records, which gives some information on previous prosper loans the borrower made</li>
+<li>loan amount and term, which are the features of the loan structure and is the basis for the rate applied to the loan.</li>
+</ul>
+
+
+### Did you create any new variables from existing variables in the dataset?
+I created four variables: LoanOrigDate, CurrentBadRecords, LoanAmtByTerm and CreditScoreRange.
+
+I created LoanOrigDate in order to remove July 2009 records.
+
+CurrentBadRecords is the sum of InquiriesLast6Months, CurrentDelinquencies , and PublicRecordsLast12Months.  
+
+The LoanAmtByTerm is Loan Amount per Month.  
+
+CreditScoreRange, which has 5 values, is a smaller version of CreditScoreRangeLower, which has 15 values.  
+
+Below is the mapping for CreditScoreRange:
+
+    CreditScoreRangeLower   CreditScoreRange
+    600, 620, 640           600-659
+    660, 680                660-699
+    700, 720                700-739
+    740, 760, 780           740-799
+    800, 820, 840, 860      800-899
+    
+The frequency of data for each of the CreditScoreRangeLower is considered in deciding the appropriate partitioning used in the mapping.  The reason for creating this variable is for visualization purposes.  
+
+### Of the features you investigated, were there any unusual distributions? Did you perform any operations on the data to tidy, adjust, or change the form of the data? If so, why did you do this?
+I log transformed the right-skewed StatedMonthlyIncome in order to better see the distribution.  The transformed distribution became normal, peaking at $5,000 monthly income.  I find unusual the outlier monthly income at $1,750,002 and the income at less than $1.  I also log transformed the AvailableBankcardCredit to also better see the distribution and found two peaks that are near or in-between its median and mean value.
+
+I checked whether ListingKey is unique and I found that those records with duplicate ListingKey have duplicate data for all the variables except for ProsperScore.  I find this odd and I think there may have been some input error.  Since, I will not be analyzing ProsperScore, I've decided to only include the first entries for each duplicate record and filter out the rest.
+
+I also filtered out records for loans created before July 2009.  This is because ProsperRating is only applicable after July 2009.  Furthermore, I've also removed the records with NA ProsperRating, since I am focusing my investigation on ProsperRating.
+
+I've created a data frame that contains the summaries (quantile values) per ProsperRating of each of the variables or features.  This is done to create a summary plot.
+
+
+# Bivariate Plots Section
+
+```{r echo=FALSE, Bivariate_Plots-CorrelationPlot1}
+
+#create a correlation table
+prosper.sub <- prosper[c("ProsperRating",
+                  "CreditScoreRangeLower",
+                  "StatedMonthlyIncome",
+                  "ProsperPrincipalBorrowed",
+                  "AvailableBankcardCredit",
+                  "LoanOriginalAmount",
+                  "Term",
+                  "LenderYield",
+                  "InquiriesLast6Months",
+                  "TotalInquiries",
+                  "CurrentDelinquencies",
+                  "DelinquenciesLast7Years",
+                  "PublicRecordsLast12Months",
+                  "PublicRecordsLast10Years")]
+
+prosper.sub$ProsperRating <- as.numeric(prosper.sub$ProsperRating)
+prosper.sub$CreditScoreRangeLower <- 
+  as.numeric(prosper.sub$CreditScoreRangeLower)
+                                               
+
+```
+
+In the correlation matrix, note that I renamed the variables to a shorter version to make the plot larger.   
+
+```{r echo=FALSE, Bivariate_Plots-CorrelationPlot2, fig.width=10, fig.height=6}
+
+#renaming the variables for nicer looking plot
+names(prosper.sub) <- c("rating",
+                  "cscore",
+                  "income",
+                  "principal",
+                  "bankcard",
+                  "loanamount",
+                  "term",
+                  "yield",
+                  "inquiry6mos",
+                  "inquirytotal",
+                  "delinq",
+                  "delinq7yrs",
+                  "pubrec12mos",
+                  "pubrec10yrs"  )
+
+cortab <- round(cor(prosper.sub, method="spearman", 
+                    use="pairwise.complete.obs"), 2)
+cortab
+
+
+colorfun <- colorRamp(c("#CC0000","white","#3366CC"), space="Lab")
+plotcorr(cortab, col=rgb(colorfun((cortab+1)/2), maxColorValue=255),
+         mar=c(0,2,1,1))
+
+```
+
+The strongest correlation is ProsperRating vs LenderYield at -0.96, next is CreditScore at 0.55, followed by BankcardCredit and LoanAmount.  Other variables that show atleast 20% positive correlation are StatedMonthlyIncome and PrincipalAmount.   Inquiry6Months and Delinquencies7Yrs also show atleast 20% correlation, but in the negative.  All the bad record variables are in the negative correlation. 
+
+I am wondering about LenderYield, it has an almost perfect correlation with ProsperRating.  So, I looked into Prosper website and found out that LenderYield is the borrower's interest rate less lender's servicing fee.  And the Borrower's rate is I think based on ProsperRating.   In short, LenderYield may be dependent on ProsperRating.  I will not be including this in my analysis because it is not a predictor variable for ProsperRating.
+
+```{r echo=FALSE, Bivariate_Plots-Rating1}
+
+ggplot(aes(x=CreditScoreRangeLower, y=ProsperRating ), data=prosper) +
+  stat_sum(aes(size = factor(..n..)),  geom = "point") +
+  scale_size_discrete(range=c(1,10), guide=FALSE)  +
+  ggtitle("CreditScore vs ProsperRating by Frequency")
+
+by(prosper$CreditScoreRangeLower, prosper$ProsperRating, summary)
+
+```
+
+The ProsperRating vs CreditScore plot shows an increasing trend.   The data points gets bigger as it moves laterally along the CreditScoreRange and diagonally along the ProsperRating. Majority of the points are in the middle of the CreditScoreRange.  There are no datapoints in the lowest CreditScore range for the top 2 ProsperRatings, 6th and 7th; and no datapoints in the highest CreditScore for the bottom 3: 1st, 2nd and 3rd.
+
+I want to look at the ProsperRating density plot by CreditScoreRange to better see the peaks in the CreditScore for each ProsperRating.  This time, I will use 5 groups instead of the 15 CreditScoreRangeLower values.
+
+```{r echo=FALSE, Bivariate_Plots-Rating2}
+
+#creditscorerangelower has 15 unique values, too big to use for scale color
+#brewer, so divide into 5 groups
+prosper$CreditScoreRange <- 
+  ifelse(prosper$CreditScoreRangeLower <= 640, "600-659",
+    ifelse(prosper$CreditScoreRangeLower <= 680, "660-699",
+      ifelse(prosper$CreditScoreRangeLower <= 720, "700-739",
+        ifelse(prosper$CreditScoreRangeLower <= 780, "740-799", "800-899"))))
+  
+prosper$CreditScoreRange <- factor(prosper$CreditScoreRange, 
+                                      levels=c("600-659","660-699","700-739",
+                                               "740-799","800-899"))
+
+ggplot(aes(x=ProsperRating), data=prosper) +
+  geom_density(aes(group=CreditScoreRange, colour=CreditScoreRange))
+
+
+```
+
+In this plot, I can clearly see in how CreditScore peaks changes as ProsperRating improves.  The lowest CreditScore peaks in the bottom 3 ProsperRating while the highest CreditScore peaks in the top two ProsperRating.  
+
+```{r echo=FALSE, Bivariate_Plots-Borrower1}
+
+ggplot(aes(x=StatedMonthlyIncome, y=ProsperRating), 
+       data=getPortion(prosper,"StatedMonthlyIncome", 0.95)) +
+  geom_jitter(alpha=0.20) 
+
+by(prosper$StatedMonthlyIncome, prosper$ProsperRating, summary)
+
+```
+
+I've removed the top 5% of the StatedMonthlyIncome data in order to better see the relationship between Income and Rating.  What I notice immediately are the vertical lines that tells me income is quite constant throughout the rating range.  Even with overplotting, I can still distinguish the vertical lines.  So, same income can be seen in the bottom rating up to the top rating but there is overplotting in the middle of the income range compared to its lower and higher range.  In the 1st rating, although I still see the vertical lines in the higher income range, there are less of them and as the rating goes up, more points can be seen in that side than in the lower side of the income range.  
+
+
+```{r echo=FALSE, Bivariate_Plots-Borrower2}
+
+ggplot(aes(y=ProsperPrincipalBorrowed, x=ProsperRating), 
+       data=subset(prosper, !is.na(ProsperPrincipalBorrowed))) +
+  geom_boxplot() + coord_flip()
+
+by(prosper$ProsperPrincipalBorrowed, prosper$ProsperRating, summary)
+
+```
+
+There area a lot of outliers, but I can clearly see that the PrincipalBorrowed median increases as the rating increases.  
+
+```{r echo=FALSE, Bivariate_Plots-Borrower3}
+
+ggplot(aes(y=AvailableBankcardCredit,x=ProsperRating), 
+       data=prosper) +
+  geom_boxplot() + coord_flip() +
+  scale_y_log10(labels=dollar) 
+
+by(prosper$AvailableBankcardCredit, prosper$ProsperRating, summary)
+
+```
+
+There are more outliers in the beginning of the AvailableBankcardCredit range than at the end.  Same with PrincipalBorrowed, the AvailableBankcardCredit median also increases as rating increases.  However, there is a big difference in the median of the top ProsperRating compared with the rest; 7th rating is 59% more than the 6th rating.
+
+```{r echo=FALSE, Bivariate_Plots-Loan1}
+
+ggplot(aes(x=ProsperRating), data=prosper) +
+  geom_density(aes(group=factor(Term), colour=factor(Term)))
+
+by(prosper$Term, prosper$ProsperRating, table)
+
+```
+
+Looking at the density plot above, the 12th and 36th Term is quite constant throughout the ProsperRating.  Also, the lowest ProsperRating only have 36 term.  For the 60 Term, there's a peak in the 4th rating.
+
+On another note, the correlation of Term with ProsperRating is weak at 0.08.  On its own, it has a weak influence and I am planning on using it with LoanOriginalAmount to get the Loan value per Month.
+
+
+```{r echo=FALSE, Bivariate_Plots-Loan2}
+
+ggplot(aes(y=LoanOriginalAmount, x=ProsperRating ), 
+       data=prosper) +
+  geom_boxplot() + coord_flip() 
+
+by(prosper$LoanOriginalAmount, prosper$ProsperRating, summary)
+
+```
+
+I didn't expect to see a clear trend between ProsperRating and LoanAmount, but the plot definitely shows that as loan amount increases, the rating increases.   I am equating ProsperRating to risk, so I thought that smaller loan amount would have lower risk, and thus should have high rating.  But that is not being shown here. Hmmm...
+
+The median loan amount of the 1st, 2nd, and 3rd ratings are way smaller compared with the top 4 ratings.  There's is a 40% difference in the median loan amount between the 3rd and 4th rating.  I can see a clear separation of the bottom 3 ratings from the rest.  
+
+Now, let's look at the bad record variables.  All these have negative correlations with ProsperRating.  Similar to the Univariate section, I will group these variables into three: Inquiries, Delinquencies and Public Records.
+
+```{r echo=FALSE, Bivariate_Plots-BadRecords1}
+
+plot1 <- ggplot(aes(y=InquiriesLast6Months, x=ProsperRating), 
+       data=prosper) +
+  geom_boxplot() + coord_flip(ylim=c(0,10)) 
+
+plot2 <- ggplot(aes(y=TotalInquiries, x=ProsperRating), 
+       data=prosper) +
+  geom_boxplot() + coord_flip(ylim=c(0,20)) 
+
+grid.arrange(plot1,plot2, ncol=2)
+
+by(prosper$InquiriesLast6Months, prosper$ProsperRating, summary)
+by(prosper$TotalInquiries, prosper$ProsperRating, summary)
+
+```
+
+In both plots, I can see a decreasing trend.  The topmost Rating has the lesser amount of datapoints compared to the lower Ratings.  This is backed by the median value for both variables; the median decreases as  rating increases.
+
+```{r echo=FALSE, Bivariate_Plots-BadRecords2}
+
+plot1 <- ggplot(aes(y=CurrentDelinquencies, x=ProsperRating), 
+       data=prosper) +
+  geom_boxplot() + coord_flip(ylim=c(0,10)) 
+
+plot2 <- ggplot(aes(y=DelinquenciesLast7Years, x=ProsperRating), 
+       data=prosper) +
+  geom_boxplot() + coord_flip(ylim=c(0,25)) 
+
+grid.arrange(plot1,plot2, ncol=2)
+
+by(prosper$CurrentDelinquencies, prosper$ProsperRating, summary)
+by(prosper$DelinquenciesLast7Years, prosper$ProsperRating, summary)
+
+
+```
+
+The median for both variables is zero for each ProsperRating.  For the CurrentDelinquencies, the 3rd quantiles for Rating 1 and 2 is higher by 1 point compared to the rest of the PropserRating, which is zero.  For DelinquenciesLast7Years, the 2nd ProsperRating has a higher 3rd quantile value than the 1st ProsperRating. 
+
+```{r echo=FALSE, Bivariate_Plots-BadRecords3}
+
+plot1 <- ggplot(aes(y=PublicRecordsLast12Months, x=ProsperRating), 
+       data=prosper) +
+  geom_boxplot() + coord_flip(ylim=c(0,5)) 
+
+plot2 <- ggplot(aes(y=PublicRecordsLast10Years, x=ProsperRating), 
+       data=prosper) +
+  geom_boxplot() + coord_flip(ylim=c(0,10)) 
+
+grid.arrange(plot1,plot2, ncol=2)
+
+by(prosper$PublicRecordsLast12Months, prosper$ProsperRating, summary)
+by(prosper$PublicRecordsLast10Years, prosper$ProsperRating, summary)
+
+```
+
+I mentioned in the Univariate section that the occurence of PublicRecords is rare and this is definitely shown in the plots above where the quantiles are mostly in the zero point.  Furthermore, the correlation with ProsperRating for PublicRecordsLast12Months and PublicRecordsLast10Years is -0.05 and -0.15, respectively.  This definitely show a weak relationship which tells me that PublicRecord variable have less influence on the ProsperRating.  I'll check this more in the Linear Regression.
+
+
+# Bivariate Analysis
+
+### Talk about some of the relationships you observed in this part of the investigation. How did the feature(s) of interest vary with other features in the dataset?
+ProsperRating correlates the strongest with CreditScore, followed by AvailableBankcardCredit and LoanAmount.
+
+In the CreditScore vs ProsperRating, an increasing trend is seen; as CreditScore increases so does the ProsperRating.  
+
+In the StatedMonthlyIncome vs ProsperRating, majority of the datapoints are in the middle of the Income range.  There are lots of vertical lines which suggest that income is fairly constant and the same income can be seen in all of the ratings.  The difference in the median between each ProsperRating is not that high; the biggest difference is from ProsperRating 6th to 7th which is 834.  Nevertheless, the median Income still increases as ProsperRating improves.  
+
+Similar with StatedMonthlyIncome, both the median value of ProsperPrincipalBorrowed and AvailableBankcardCredit increases as ProsperRating improves.  Furthermore, the median of the AvailableBankcardCredit for the 7th Rating is more than twice the median of the 6th Rating.
+
+The LoanOriginalAmount median also increases as ProsperRating increases.  Lower loan amount have lower ProsperRating than loans with higher amount.
+
+All inquiries, delinquencies and public record features have a negative relationship with ProsperRating; as Rating increases, frequency of bad records decreases.  
+
+### Did you observe any interesting relationships between the other features (not the main feature(s) of interest)?
+The AvailableBankcardCredit correlates well with CreditScore at 0.55, which makes sense as they are both related to a borrower's credit standing.  
+
+Both ProsperPrincipalBorrowed and StatedMonthlyIncome correlates more strongly with LoanOriginalAmount at 0.42 and 0.41, respectively than with ProsperRating.  The LoanOriginalAmount eventually becomes ProsperPrincipalBorrowed, so its strong correlation is expected.  For StatedMonthlyIncome, I guess the amount a borrower loans is a proportion of his income; the higher his income, the higher the amount that he can loan.  
+
+The CurrentDelinquencies, DelinquenciesLast7Years and PublicRecordsLast10Years have a stronger correlation with CreditScore compared with ProsperRating, at -0.20, -0.30, and -0.28, respectively.  So it seems that these variables have more influence on the CreditScore than with ProsperRating; unlike with Inquiries where it has greater correlation or influence with ProsperRating than CreditScore.
+
+### What was the strongest relationship you found?
+CreditScore shows the strongest relationship with ProsperRating at positive correlation of 0.55, followed by AvailableBankcardCredit at 0.47 and LoanOriginalAmount at 0.45.  
+
+
+# Multivariate Plots Section
+
+There are 4 main loan feature with positive correlation, not including Term.  These are StatedMonthlyIncome, AvailableBankcardCredit, LoanOriginalAmount, and ProsperPrincipalBorrowed.  First, I want to see the relationship of these variables with ProsperRating and CreditScore.  Later, I will look at how these positive-correlated variables relate to the Bad Record variables.
+
+```{r echo=FALSE, Multivariate_Plots1}
+
+ggplot(aes(x=StatedMonthlyIncome, y=ProsperRating), 
+             data=getPortion(prosper, "StatedMonthlyIncome", 0.95)) +
+  geom_jitter(aes(color=CreditScoreRange), alpha=0.20) +
+  scale_color_brewer(type="div") 
+
+```
+
+I removed the top 5% and the relationship that pops out more is ProsperRating vs CreditScore where higher ratings have higher CreditScore.  The StatedMonthlyIncome is quite constant where the same vertical lines can be seen in all the ProsperRating.  What I can conclude in this plot is that CreditScore influences the ProsperRating more than the StatedMonthlyIncome.
+
+
+```{r echo=FALSE, Multivariate_Plots2}
+ggplot(aes(x=AvailableBankcardCredit, y=ProsperRating), 
+             data=getPortion(prosper,"AvailableBankcardCredit", 0.95)) +
+  geom_jitter(aes(color=CreditScoreRange), alpha=0.20) +
+  scale_color_brewer(type="div") 
+
+```
+
+Unlike the StatedMonthlyIncome, I can see the influence of AvailableBankcardCredit with CreditScore and ProsperRating.  Lower CreditScore can be seen in the lower range of BankcardCredit and higher CreditScore is seen in higher BankcardCredit.  Furthermore, the BankcardCredit variance increases as the ProsperRating increases.  
+
+```{r echo=FALSE, Multivariate_Plots3}
+
+ggplot(aes(x=LoanOriginalAmount, y=ProsperRating), 
+       data=prosper) +
+  geom_jitter(aes(color=CreditScoreRange), alpha=0.20) +
+  scale_color_brewer(type="div")  
+
+```
+
+Here, I can see that lower ProsperRating have lower CreditScore and higher ProsperRating have higher CreditScore. 
+
+Now, I want to look at the Loan per Month by dividing LoanOriginalAmount by Term.  There is a variable that actually depicts what the borrower pay per month; this is MonthlyLoanPayment.  I actually thought of using this instead of Loan Amount but I don't want to add any bias that may incur because of rates applied to the loan.
+
+```{r echo=FALSE, Multivariate_Plots4}
+prosper$LoanAmtByTerm <- prosper$LoanOriginalAmount / prosper$Term
+
+ggplot(aes(x=LoanAmtByTerm, y=ProsperRating), 
+       data=prosper) +
+  geom_jitter(aes(color=CreditScoreRange), alpha=0.20) +
+  scale_color_brewer(type="div")  
+
+by(prosper$LoanAmtByTerm, prosper$ProsperRating, summary)
+
+```
+
+The plot above is similar to the LoanOriginalAmount vs ProsperRating by CreditScore.  High ProsperRating have high CreditScore.  Furthermore, the median amount for LoanAmtByTerm also increases as ProsperRating increases. 
+
+
+
+```{r echo=FALSE, Multivariate_Plots5}
+
+ggplot(aes(x=ProsperPrincipalBorrowed, y=ProsperRating), 
+       data=prosper) +
+  geom_jitter(aes(color=CreditScoreRange), alpha=0.20) +
+  scale_color_brewer(type="div") 
+
+
+```
+
+Again, I can see the relationship of ProsperRating and CreditScore; higher ProsperRating have higher CreditScore.  This relationship is apparent in all the positive-correlated plots above.
+
+Now, I want to see the relationship of the negative-correlated features, which I call Bad Record variables, with CreditScore.  I am thinking of just using the bad record values incurred recently rather than the Overall Total Bad Record values.  I think that the current values have more impact than the overall total.  Among the bad record variables, InquiriesLast6Months have the strongest correlation at -0.26, next is -0.21 for Delinquency7Years followed by CurrentDelinquencies at -0.18.  There is just a .03 difference in the Delinquency correlation values, so I think it would be enough just to use the recent/current values rather than using the overall total.  Before, I disregard the past inquires, delinquencies and public records, let's compare their R-squared value to check if its enough to only use the current bad record values.
+
+
+```{r echo=FALSE, Multivariate_Plots-BadRecords1}
+
+m1 <- lm(as.numeric(ProsperRating) ~ I(-InquiriesLast6Months -
+                                         CurrentDelinquencies -
+                                         PublicRecordsLast12Months), 
+         data = prosper)
+
+#note that TotalInquiries also contains the InquiriesLast6Months
+m2 <- lm(as.numeric(ProsperRating) ~ I(-TotalInquiries -
+                                         CurrentDelinquencies -
+                                         DelinquenciesLast7Years -
+                                         PublicRecordsLast12Months -
+                                         PublicRecordsLast10Years), 
+         data = prosper)
+mtable(m1,m2)
+
+
+
+```
+
+Look's like having the total bad records have lesser influence on the result of the ProsperRating.  The current bad records have 0.086 R-squared compared to 0.046 with total bad records.  So, I will just use the Current Bad Record values.  Also, I would just like to compare the positive-correlated variables with the combination or the total Bad Record values.  So, I will add them up to one variable named CurrentBadRecords.
+
+```{r echo=FALSE, Multivariate_Plots-BadRecordsVsLoanAmount2}
+
+prosper$CurrentBadRecords <- prosper$InquiriesLast6Months +
+  prosper$CurrentDelinquencies + prosper$PublicRecordsLast12Months
+
+
+ggplot(aes(x=CreditScoreRange, 
+           y=CurrentBadRecords), 
+       data=prosper) +
+  geom_jitter(aes(color=ProsperRating), alpha=0.50) +
+  scale_color_brewer(type="div") +
+  ylim(0,35)
+
+by(prosper$CurrentBadRecords, prosper$CreditScoreRange, summary)
+```
+
+I have trimmed down the CurrentBadRecords to 35 to better see the plot, as only CreditScoreRange 700-739 have a BadRecord count higher than 35.  Majority of lowest ProsperRating can be found in the lowest CreditScoreRange and as CreditScore improves, ProsperRating improves and Bad Record count decreases.  Furthermore, majority of loans with high Bad Record count have lower ProsperRating.
+
+Now, let's look at the relationship of the positive-correlated features with the CurrentBadRecord variable.  Let's start with Loan Amount by Term, faceted with CreditScoreRange.
+
+```{r echo=FALSE, Multivariate_Plots-BadRecordsVsLoanAmount3}
+
+ggplot(aes(y=CurrentBadRecords, 
+           x=LoanAmtByTerm), 
+       data=prosper) +
+  geom_jitter(aes(color=ProsperRating), alpha=0.80) +
+  scale_color_brewer(type="div") +
+  ylab("Current Bad Records") +
+  xlab("Loan Value by Term") +
+  facet_wrap(~CreditScoreRange)
+
+
+```
+
+Here, I can see smaller loan term value tend to have higher inquiries, delinquencies and public records.  Furthermore, lower loan value also have low ProsperRating and more lower ProsperRating can be found in the lower CreditScore.  
+
+I remember that I was surprised to find out that lower Loan Amount have lower ProsperRating, and this plot certainly support this relationship.  So, there is more risk in investing in lower loan amounts.  
+
+
+```{r echo=FALSE, Multivariate_Plots-BadRecordsVsBankcardCredit, fig.width=10}
+
+ggplot(aes(y=CurrentBadRecords, 
+           x=AvailableBankcardCredit), 
+       data=prosper) +
+  geom_jitter(aes(color=ProsperRating), alpha=0.80) +
+  scale_color_brewer(type="div") +
+  ylab("Current Bad Records") +
+  scale_x_continuous(breaks=c(100000,300000,500000), label=dollar) +
+  facet_wrap(~CreditScoreRange)
+
+```
+
+Again here, I can see that high AvailableBankcardCredit tend to have high ProsperRating, at the same time, they also have lower inquiries, delinquencies, and public records.  Also, I can see that as CreditScore increases, the variance in the BankcardCredit also increases.  Once more, low ProsperRating have higher risk; low ratings have more bad records associated with it and they tend to have lower AvailableBankcardCredit and CreditScore as well. 
+
+
+```{r echo=FALSE, Multivariate_Plots-BadRecordsVsStatedMonthlyIncome}
+
+ggplot(aes(y=CurrentBadRecords, 
+           x=StatedMonthlyIncome), 
+       data=getPortion(prosper,"StatedMonthlyIncome", 0.95) ) +
+  geom_jitter(aes(color=ProsperRating), alpha=0.50) +
+  scale_color_brewer(type="div") +
+  ylab("Current Bad Records") + 
+  facet_wrap(~CreditScoreRange)
+
+```
+
+This plot is showing 95% of the StatedMonthlyIncome datapoints, removing the 1 million outlier.  I can clearly see that the low ProsperRating shows more at the lower CreditScore and those with higher bad records also have lower PropserRating.  
+
+```{r echo=FALSE, Multivariate_Plots-PrincipalBorrowed}
+
+ggplot(aes(y=CurrentBadRecords, 
+           x=ProsperPrincipalBorrowed), 
+       data=prosper ) +
+  geom_jitter(aes(color=ProsperRating), alpha=0.80) +
+  scale_color_brewer(type="div") +
+  ylab("Current Bad Records") +
+  facet_wrap(~CreditScoreRange)
+
+
+```
+
+Again here, most lower ProsperRating appear at lower CreditScore and they have higher Bad Records. Also, most of the lower ProsperRating appear at the lower-end of the ProsperPrincipalBorrowed range.  There is more risk in investing to loans which have lower previous loans.  
+
+I remember that LoanOriginalAmount have a higher correlation with ProsperPrincipalBorrowed than with ProsperRating.  This makes sense as LoanAmount eventually becomes ProsperPrincipalBorrowed.  Lower LoanAmount also have lower ProsperRating, same with lower PrincipalProsperBorrowed which also have lower ProsperRating.
+
+What the previous plots have shown is that low income, low loan value, low bankcard credit and low principal borrowed have a higher risk.  Higher risk means higher number of bad records and low ProsperRating.  They all displayed the same trend and relationship with ProsperRating.  So I think we can use linear model to predict ProsperRating.
+
+But first, let's look at the summaries of all the features for each ProsperRating.
+
+```{r echo=FALSE, Multivariate_Plots-Summary1, fig.width=10}
+
+rating_groups <-group_by(prosper, ProsperRating)
+prosper.by_rating <- summarise(rating_groups, n=n())
+
+#i could have added each column in the summarise method above, but
+#it is harder to add manually all column names
+prosper.by_rating <- addSummaryColumnsByProsperRating(prosper, 
+                                                      prosper.by_rating,
+                                                      "StatedMonthlyIncome", 
+                                                      "income")
+prosper.by_rating <- addSummaryColumnsByProsperRating(prosper, 
+                                                      prosper.by_rating,
+                                                      "LoanOriginalAmount", 
+                                                      "loanAmt")
+prosper.by_rating <- addSummaryColumnsByProsperRating(prosper, 
+                                                      prosper.by_rating,
+                                                      "AvailableBankcardCredit", 
+                                                      "bankcard")
+prosper.by_rating <- addSummaryColumnsByProsperRating(prosper, 
+                                                      prosper.by_rating,
+                                                    "ProsperPrincipalBorrowed", 
+                                                      "principal")
+
+prosper.by_rating <- addSummaryColumnsByProsperRating(prosper, 
+                                                      prosper.by_rating, 
+                                                      "LoanAmtByTerm", 
+                                                      "loanByTerm")
+
+prosper.by_rating <- addSummaryColumnsByProsperRating(prosper, 
+                                                      prosper.by_rating, 
+                                                      "CurrentBadRecords", 
+                                                      "curBadRec")
+
+#getting a match name error when melting prosper.by_rating directly
+#had to convert it to data.frame?  seems summarise function did not return a
+#compatible dataframe
+prosper.by_rating <- data.frame(prosper.by_rating)
+prosper.by_rating.reshape <- melt(prosper.by_rating, 
+                                  id=c("ProsperRating"))
+prosper.by_rating.reshape$Quantile <- apply(prosper.by_rating.reshape[,2:3], 
+                                            1, getQVal)
+prosper.by_rating.reshape$variable <- apply(prosper.by_rating.reshape[,2:3], 
+                                            1, splitByDot)
+
+ggplot(aes(x=value, 
+           y=Quantile), 
+       data=subset(prosper.by_rating.reshape, 
+                   !(variable %in% c("n"))) ) +
+  geom_point(aes(color=ProsperRating), size=2) +
+  geom_line(aes(color=ProsperRating)) +
+  facet_wrap(~variable, scales="free_x") +
+  scale_x_log10(label=comma) +
+  scale_y_continuous(breaks=seq(0,1,.25), 
+                     label=c("min","0.25", "median", "0.75", "max")) 
+
+```
+
+Here, we can see the movement of the values for each ProsperRating at different quantiles. Generally, the movement of the values from 25% to 75% quantile is increasing at the same time lower ProsperRating have lower value compared to higher ProsperRating.  For the bankcard, income, loanAmt, loanByTerm, and principal, the top ProsperRating has the biggest value.  
+
+Looking at the income at 100% quantile, the lowest ProsperRating has the biggest income; see how the line moves from being the lowest in the 3rd quantile to becoming the biggest value in the 100% quantile.  This is due to the 1.75million outlier in the StatedMonthlyIncome distribution.  This just goes to show that you cannot just look at one area to get the whole picture, especially when the data came from an outlier and not a good representative of the distribution.  
+
+In another note, with regards to the Current Bad Record plot; this shows that the top ProsperRating has the lowest value at each quantile compared to the other ProsperRatings.
+
+Now, let's do our model for predicting ProsperRating.  I am going to add in the individual features, except for LoanOriginalAmount where I will apply the LoanValue per Term.  
+
+```{r echo=FALSE, LinearRegression1}
+
+m1 <- lm(as.numeric(ProsperRating) ~ CreditScoreRangeLower, data = prosper)
+m2 <- update(m1, ~ . + I(LoanOriginalAmount/Term))
+m3 <- update(m2, ~ . + AvailableBankcardCredit)
+m4 <- update(m3, ~ . + ProsperPrincipalBorrowed)
+m5 <- update(m4, ~ . + StatedMonthlyIncome)
+m6 <- update(m5, ~ . + I(-InquiriesLast6Months))
+m7 <- update(m6, ~ . + I(-CurrentDelinquencies))
+m8 <- update(m7, ~ . + I(-PublicRecordsLast12Months))
+
+mtable(m1, m2, m3, m4, m5, m6, m7, m8)
+
+```
+
+The overall R-squared is 0.57, which is good; not very strong but there is a 57% chance that our model will hold true for predicting the ProsperRating.  Also, the difference in adding StatedMonthlyIncome is just 0.1%, also similar is CurrentDelinquencies.  Also, looks like PublicRecordsLast12Months has no impact on ProsperRating at all.
+
+# Multivariate Analysis
+
+### Talk about some of the relationships you observed in this part of the investigation. Were there features that strengthened each other in terms of looking at your feature(s) of interest?
+Loans with higher ProsperRating have higher CreditScore and loans with lower ProsperRating have lower CreditScore.  This relationship resonates in the features with positive correlation:  LoanAmount per Term, StatedMonthlyIncome, AvailableBankcardCredit and ProsperPrincipalBorrowed.
+
+Furthermore, higher ProsperRating have the higher medians in all the features, except for the features with negative correlation which are Inquiries, Delinquencies and Public Records.  
+
+On the other hand, loans with higher number of Inquiries, Delinquencies and Public Records have lower ProsperRating than loans with lower number of Inquiries, Delinquencies and Public Records.
+
+Majority of loans with low ProsperRating exhibits low value in Loan Amount, Bankcard Credit, Income and Principal Borrowed, at the same time they also have the higher Inquiries, Delinquencies and Public Records, than loans with better ProsperRating.
+
+
+### Were there any interesting or surprising interactions between features?
+I find interesting the relationship between Loan Amount and ProsperRating; lower Loan Amounts tend to have lower ProsperRating.  I find this odd as I thought that there is low risk in investing to such loans.  But low loan amounts also have low Credit Score and higher number of  Inquiries, Delinquencies and Public Records.
+
+Re-thinking about this relationship and the demographics of borrowers for low loan amounts, I realized that if you borrow a small amount, then that is probably the amount that you can pay.  You may have a low Bankcard credit and low income, and you may not be able to go back to Prosper and borrow more.  Furthermore, if you are low in cash, then the possibility of being delinquent, inspite of your loan being low, is high.  Also, come to think about it, If I have two loans, one is big and the other is small.  I would first take care of paying the higher loan than the lower loan because the rate of the higher loan is high.  
+
+In retrospect, now it makes sense the relationship of Loan Amount with ProsperRating.  There are more risk in investing with lower loan amounts than with higher loan amounts.
+
+
+### OPTIONAL: Did you create any models with your dataset? Discuss the strengths and limitations of your model.
+
+Yes, I created a linear model with dependent variable as the ProsperRating and the predictors as the Credit Score, Loan Amount per Term, Income, Prosper Principal Borrowed, and the Current Inquiries, Delinquencies and Public Records.
+
+The variables in the linear model only account for 57% of the variance in the Prosper Rating.  This also means that there is a 57% chance that the model will hold true for predicting the Prosper Rating.   
+
+One of the model's limitation is the huge amount of variables that are not analyzed for predicting ProsperRating.  In fact, only 12 out of 80 (excluding Prosper Rating) were analyzed and only 9 were included in this model.  Another limitation would be the type of regression used.  Linear regression may not be the best model for predicting an ordinal variable, such as ProsperRating.  There may be a  better regression model to use, such as Ordinal Regression.  
+
+  
+
+------
+
+# Final Plots and Summary
+
+### Plot One
+```{r echo=FALSE, Plot_One}
+
+ggplot(aes(x=ProsperRating), data=prosper) +
+  geom_density(aes(group=CreditScoreRange, colour=CreditScoreRange)) +
+  ggtitle("ProsperRating Density plot by CreditScoreRange")
+
+```
+
+
+### Description One
+This plot shows how CreditScore peak changes as ProsperRating improves.  The lowest CreditScore peaks at ProsperRating 1-3 and then gets lower as ProsperRating improves, there is even no 600-659 CreditScore in the topmost ProsperRating.  Similarly, the highest CreditScore has the lowest density in the ProsperRating 1, then goes up as ProsperRating improves where it peaks at ProsperRating 6 and 7.  
+
+Loans with low ProsperRating have low CreditScores; and as CreditScore improves so does the ProsperRating.
+
+### Plot Two
+```{r echo=FALSE, Plot_Two}
+
+ggplot(aes(x=CreditScoreRange, 
+           y=CurrentBadRecords), 
+       data=prosper) +
+  geom_jitter(aes(color=ProsperRating), alpha=0.50) +
+  scale_color_brewer(type="div") +
+  ylim(0,35) +
+  ggtitle("Current Bad Records vs CreditScore and ProsperRating")
+
+```
+
+### Description Two
+CurrentBadRecords is the sum of the recent Inquiries, Delinquencies and Public Records.  This plot shows the relationship of CreditScore and ProsperRating with Current Bad Record.  There are more low ProsperRating (1 and 2) in the lower CreditScoreRange than in the higher CreditScoreRange.  As CreditScore improves, bad record count decreases and ProsperRating improves.  Majority of the loans with high Bad Record count have low ProsperRating.
+
+### Plot Three
+```{r echo=FALSE, Plot_Three}
+
+ggplot(aes(y=CurrentBadRecords, 
+           x=LoanAmtByTerm), 
+       data=prosper) +
+  geom_jitter(aes(color=ProsperRating), alpha=0.80) +
+  scale_color_brewer(type="div") +
+  ylab("Current Bad Records") +
+  xlab("Loan Value by Term") +
+  facet_wrap(~CreditScoreRange)
+
+```
+
+### Description Three
+Majority of the loans in the lower CreditScore range have lower ProsperRating and as CreditScore improves, so does the ProsperRating.  Furthermore, lower ProsperRating have higher numbers of Current Bad Records (Inquiries, Delinquencies and Public Records) and these lower ProsperRating appear at the lower-end of the Loan value by Term.  As the loan value gets bigger, bad record count decreases and ProsperRating improves.
+
+Loan Amount and Term are two of the main properties of a loan.  This plot clearly shows that lower Loan Value by Term have more risk than higher loan value.
+
+------
+
+# Reflection
+The Prosper data set originally contains 113,937 records with 81 features and I was able to trim it down to 83,966 records; removing loans that were made prior to July 2009, those with duplicate ListingKeys and those with NA ProsperRating.   
+
+There are a lot of challenges I faced with this study.  One is not being familiar with Prosper, so going through their website and reading information on Prosper listing certainly helps, especially in understanding the different features of the Prosper loan.  
+
+Another challenge is choosing which feature is the most interesting.  The problem with Prosper is that it has many interesting features, so it is hard to choose which one is the most interesting,  like ProsperScore, Borrower's Rate, Lender Yield.  However, what I mostly see in the Prosper website is the Prosper Rating.  I also like the fact that Prosper Rating is a measurement of a Loan's risk.  So this made me interested on the different features that may make a loan risky.
+
+
+The most difficult task I find in this study is choosing 10-15 features out of 81.  There are some features that may refer to the same thing or the same concept.  Like AvailableBankcardCredit, RevolvingCreditBalance and BankcardUtilization.  The last two has something to do with how you use your credit card, but I chose the first one because it is the one that I am most familiar with.  One premise I follow is to choose features that I am most familiar or those that I can easily understand.  Another premise that I follow is that the features should come from independent observations or not computed within the Prosper environment.  At first, I included ProsperScore but I realized that this is computed based on other features in the loan.  Same thing with Lender Yield, which I included in the early days of this study.  LenderYield has a 96% correlation with ProsperRating, so its almost perfect.  It made me wonder if I should include it as it will drive my linear model.  So, I read more on its definition from the website and concluded to remove it from my analysis as LenderYield's value may be dependent on ProsperRating, not the other way around.  So finally, I came up with 13 features, including ProsperRating, that I am happy with.
+
+The ProsperRating risk relationship made sense to me when I got into the Multivariate section.  Here, I can finally see how ProsperRating is a measure of risk in the Bad Record plots against the Loan Amount per Term, Principal Borrowed, Bankcard Credit and Income.  These plots clearly shows Low Prosper Rating have higher risk.  I especially like how the Bad Record vs Loan Value per Term validated the relationship shown in the plot for LoanOriginalAmount vs ProsperRating, wherein low loan amounts have lower Prosper Rating.  The Bad Record vs Loan Value per Term supported the risk involved with lower loan amounts and somehow changed my perception on investing to lower loan amounts as oppose to investing to higher loan amounts in Prosper.
+
+I would be interested in exploring Ordinal Regression and how it could be use to predict ProsperRating; finding out if it is a better model in predicting ProsperRating than Linear Regression.   I would also be interested in looking at the other independent variables available in Prosper, which feature can improve the model and give greater measure of predicting Prosper Rating.
+
+
+# Acknowledgements
+
+Below are the list of websites I referred to in order to complete this study:
+<ul>
+<li>https://www.prosper.com/invest/how-to-invest/prosper-ratings/</li>
+<li>https://www.prosper.com/loans/rates-and-fees/</li>
+<li>https://www.prosper.com/help/topics/how-to-read-a-loan-listing/</li>
+<li>http://www.statmethods.net/</li>
+<li>http://www.cookbook-r.com/Manipulating_data/</li>
+<li>https://statistics.laerd.com/spss-tutorials/ordinal-regression-using-spss-statistics.php</li>
+</ul>
+<br>
+
